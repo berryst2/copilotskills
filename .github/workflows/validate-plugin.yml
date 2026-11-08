@@ -36,10 +36,6 @@ jobs:
           npm install -g @microsoft/wiqd
           wiqd --version
 
-      - name: Accept WIQD EULA
-        run: |
-          wiqd eula accept wiqd
-
       - name: Verify WIQD
         run: |
           wiqd --version
