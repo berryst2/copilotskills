@@ -1,0 +1,49 @@
+name: Validate Microsoft 365 plugin
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "appPackage/**"
+      - "m365agents.yml"
+      - "wiqd.plugin.json"
+      - ".github/workflows/**"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate plugin
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Configure Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24.15.0"
+          cache: npm
+
+      - name: Install Work IQ Dev Tools
+        shell: bash
+        run: |
+          curl -fsSL https://aka.ms/wiqd/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Verify WIQD installation
+        shell: bash
+        run: |
+          wiqd --version
+          wiqd doctor
+
+      - name: Run static plugin validation
+        shell: bash
+        run: |
+          wiqd plugin validate \
+            --path . \
+            --env dev \
+            --json
