@@ -26,7 +26,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "24.15.0"
-          cache: npm
+          package-manager-cache: false
+
+      - name: Show Node version
+        run: node --version
 
       - name: Install Work IQ Dev Tools
         shell: bash
