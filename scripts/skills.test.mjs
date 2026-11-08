@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { zipSync, strToU8 } from 'fflate';
 import { parseDocument } from 'yaml';
 import { discover, verify, repository } from './skills.mjs';
@@ -109,10 +110,40 @@ test('workflow YAML parses with expected secret-free CI and gated release', () =
     if (file === 'validate-plugin.yml') {
       assert.ok(!JSON.stringify(workflow).includes('secrets.'));
       assert.ok(workflow.on.pull_request.paths.includes('legal/**'));
+      assert.equal(workflow.jobs.validate['runs-on'], 'ubuntu-latest');
+      assert.ok(!workflow.jobs.validate.steps.some(step => /wiqd|plugin\.ps1/.test(step.run ?? '')));
     } else {
+      assert.deepEqual(workflow.jobs.package['runs-on'], ['self-hosted', 'linux', 'x64', 'wiqd']);
       assert.equal(workflow.jobs.package.environment, 'dev');
       assert.equal(workflow.jobs.package.if, "github.ref == 'refs/heads/main'");
       assert.equal(workflow.concurrency['cancel-in-progress'], false);
+      const steps = workflow.jobs.package.steps;
+      const preflight = steps.findIndex(step => step.run === './scripts/check-wiqd.ps1');
+      const deploy = steps.findIndex(step => step.env?.M365_ACCOUNT_PASSWORD);
+      assert.ok(preflight >= 0 && preflight < deploy);
+      assert.equal(steps.at(-1).if, 'always()');
+    }
+  }
+});
+
+test('runner preflight accepts existing consent and rejects missing consent without accepting', () => {
+  const script = join(repository, 'scripts', 'check-wiqd.ps1').replaceAll("'", "''");
+  for (const state of ['accepted', 'required']) {
+    const result = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', `
+      function wiqd {
+        if ($args -contains 'accept') { throw 'Test must never perform acceptance.' }
+        $global:LASTEXITCODE = 0
+        if ($args -contains '--version') { return '0.24.0' }
+        return '{"status":"success","data":{"wiqd":{"state":"${state}"}}}'
+      }
+      & '${script}'
+    `], { encoding: 'utf8' });
+    assert.ifError(result.error);
+    if (state === 'accepted') {
+      assert.equal(result.status, 0, result.stderr);
+    } else {
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /human must review and accept/i);
     }
   }
 });

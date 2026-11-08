@@ -6,16 +6,18 @@ frontmatter, a description and a nonempty `SKILL.md` body. Keep supporting files
 inside that skill folder. Symlinks, escaping Markdown resources and potential
 credential files are rejected.
 
-`banking-skills` is a WIQD-generated plugin container. CI stages a fresh copy,
+`banking-skills` is a WIQD-generated plugin container. The release job stages a fresh copy,
 registers every source skill using WIQD and copies complete skill folders into
 `appPackage/skills/<name>`. Do not maintain duplicate skills in the container.
 
 ## Continuous integration
 
-`Validate Microsoft 365 plugin` runs on relevant pull requests and pushes to
-`main`, and can also be run manually. It installs WIQD 0.24.0 on Node 24.15.0,
-runs the source/ZIP checker tests, stages skills and runs explicit offline
-source validation. It receives no deployment credentials.
+`Validate banking skill sources` runs on relevant pull requests and pushes to
+`main`, and can also be run manually. It uses Node 24.15.0 on GitHub-hosted
+Ubuntu, runs the source/ZIP checker tests and checks all source folders.
+It does not install/run WIQD, stage a plugin, or receive deployment credentials.
+These are repository checks, not WIQD validation. WIQD source validation remains
+a required release gate on the prepared runner.
 
 WIQD source validation does not provide full skill-only plugin validation.
 Repository checks cover source structure and local Markdown links; release
@@ -23,6 +25,31 @@ checks verify every packaged skill/resource byte and reject unexpected ZIP
 files. Neither proves runtime behavior or Marketplace acceptance.
 
 ## Manual packaging
+
+### Prepare a dedicated runner
+
+The release workflow targets a persistent Linux x64 self-hosted runner with the
+custom label `wiqd`. Install Node 24.15.0, PowerShell 7 and WIQD 0.24.0 during
+human runner setup, and ensure `wiqd` is on the runner service account's PATH.
+
+A human must review the [WIQD EULA](https://aka.ms/wiqd/eula) and, if they agree,
+run `wiqd eula accept wiqd` interactively outside CI as that same account.
+Confirm `wiqd eula status --json` reports `data.wiqd.state` as `accepted`.
+Acceptance on your development machine does not establish acceptance on a
+different runner account. CI never performs acceptance. The release job checks
+the pinned version and existing acceptance before injecting credentials.
+
+Keep this runner restricted to trusted release workflows on `main`; do not run
+pull-request code on it. For a public repository, use your organization's
+approved self-hosted-runner isolation and access controls. The hosted PR job
+stays separate. Runner registration/security setup is an administrator task,
+not performed by this repository.
+
+The job uses a unique staging directory and removes its staged environment
+files after success or failure. This does not reset the runner's EULA state or
+remove its authentication caches.
+
+### Configure the deployment environment
 
 Create a GitHub environment named `dev`. Restrict it to `main` and configure
 required reviewers before enabling provisioning.
@@ -65,9 +92,11 @@ The pipeline does not submit to the tenant catalog, share with an audience or
 upload the ZIP for TDP/Marketplace validation. Run those as separately approved
 operations. No release was executed while implementing this pipeline.
 
-Fresh runners may need prerequisite EULA consent established through a
-supported human-approved setup. A EULA gate fails the build; never automate
-acceptance or copy a developer authentication cache into CI.
+Fresh GitHub-hosted runners cannot use this release path without an officially
+supported consent setup. Do not add automated acceptance, fake receipts or copy
+developer configuration/authentication caches into CI. If consent becomes
+invalid, re-run the human setup on the dedicated runner; the pipeline fails
+closed rather than repairing consent automatically.
 
 ## Local checks
 

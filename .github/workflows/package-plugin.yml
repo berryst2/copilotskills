@@ -21,7 +21,7 @@ jobs:
     name: Provision dev and build ZIP
     if: github.ref == 'refs/heads/main'
     environment: dev
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, wiqd]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -31,14 +31,15 @@ jobs:
         with:
           node-version: "24.15.0"
           package-manager-cache: false
-      - name: Install pinned tools
-        run: |
-          npm ci
-          npm install -g @microsoft/wiqd@0.24.0
-          wiqd --version --skill wiqd --workflow plugin
+      - name: Verify prepared runner and human EULA acceptance
+        shell: pwsh
+        run: ./scripts/check-wiqd.ps1
+      - name: Install source check dependencies
+        run: npm ci
       - name: Test source and ZIP checks
         run: npm test
       - name: Stage, validate, provision and package
+        id: build
         shell: pwsh
         env:
           CI_ENABLED: 'true'
@@ -53,10 +54,11 @@ jobs:
           M365_APP_ID: ${{ vars.M365_APP_ID }}
           CREATE_NEW_APP: ${{ inputs.create_new_app }}
         run: |
-          ./scripts/plugin.ps1 -ProjectPath (Join-Path $env:RUNNER_TEMP 'banking-skills') `
+          $project = Join-Path $env:RUNNER_TEMP ("banking-skills-{0}-{1}" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT)
+          ./scripts/plugin.ps1 -ProjectPath $project `
             -Provision -CreateNewApp:($env:CREATE_NEW_APP -eq 'true')
       - name: Preserve non-secret provisioning IDs
-        if: always()
+        if: always() && steps.build.outcome != 'skipped'
         uses: actions/upload-artifact@v4
         with:
           name: banking-skills-provisioning-ids
@@ -71,3 +73,11 @@ jobs:
             dist/checksum.json
           if-no-files-found: error
           retention-days: 14
+      - name: Clean staged project and deployment environment files
+        if: always()
+        shell: pwsh
+        run: |
+          $project = Join-Path $env:RUNNER_TEMP ("banking-skills-{0}-{1}" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT)
+          if (Test-Path -LiteralPath $project) {
+            Remove-Item -LiteralPath $project -Recurse -Force
+          }

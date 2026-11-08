@@ -1,4 +1,4 @@
-name: Validate Microsoft 365 plugin
+name: Validate banking skill sources
 
 on:
   workflow_dispatch:
@@ -31,7 +31,7 @@ permissions:
 
 jobs:
   validate:
-    name: Validate plugin
+    name: Check repository skill sources
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -47,18 +47,11 @@ jobs:
           node-version: "24.15.0"
           package-manager-cache: false
 
-      - name: Install Work IQ Dev Tools
-        run: |
-          npm install -g @microsoft/wiqd@0.24.0
-          wiqd --version --skill wiqd --workflow plugin
-
       - name: Install source check dependencies
         run: npm ci
 
       - name: Test source and ZIP checks
         run: npm test
 
-      - name: Stage skills and validate source offline
-        shell: pwsh
-        run: |
-          ./scripts/plugin.ps1 -ProjectPath (Join-Path $env:RUNNER_TEMP 'banking-skills')
+      - name: Check all skill source folders
+        run: npm run check

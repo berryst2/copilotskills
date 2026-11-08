@@ -11,11 +11,16 @@ $ProjectPath = [IO.Path]::GetFullPath($ProjectPath)
 if (Test-Path -LiteralPath $ProjectPath) { throw "Use a new staging directory: $ProjectPath" }
 if ($CreateNewApp -and -not $Provision) { throw 'CreateNewApp requires Provision.' }
 
+& (Join-Path $PSScriptRoot 'check-wiqd.ps1')
+
 function Invoke-Wiqd([string[]]$Arguments) {
     $text = & wiqd @Arguments --json --skill wiqd --workflow plugin
     $code = $LASTEXITCODE
     if ($code -ne 0) {
         $text | Write-Host
+        if ($code -eq 3) {
+            throw 'WIQD is blocked by human EULA consent. Review https://aka.ms/wiqd/eula and prepare the runner account interactively outside CI. No automatic acceptance or retry is permitted.'
+        }
         throw "WIQD failed with exit code $code. Stop; do not automatically retry provisioning."
     }
     $result = ($text -join "`n") | ConvertFrom-Json
