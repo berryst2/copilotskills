@@ -32,13 +32,15 @@ jobs:
         run: node --version
 
       - name: Install Work IQ Dev Tools
-        shell: bash
         run: |
-          curl -fsSL https://aka.ms/wiqd/install.sh | bash
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          npm install -g @microsoft/wiqd
+          wiqd --version
 
-      - name: Verify WIQD installation
-        shell: bash
+      - name: Accept WIQD EULA
+        run: |
+          wiqd eula accept wiqd
+
+      - name: Verify WIQD
         run: |
           wiqd --version
           wiqd doctor
