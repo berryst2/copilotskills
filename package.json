@@ -1,0 +1,12 @@
+{
+  "name": "banking-skills-ci",
+  "private": true,
+  "scripts": {
+    "test": "node --test scripts/skills.test.mjs",
+    "check": "node scripts/skills.mjs discover"
+  },
+  "devDependencies": {
+    "fflate": "0.8.3",
+    "yaml": "2.9.1"
+  }
+}

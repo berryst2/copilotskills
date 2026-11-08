@@ -1,13 +1,29 @@
 name: Validate Microsoft 365 plugin
 
 on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "legal/**"
+      - "lending/**"
+      - "operations/**"
+      - "technology/**"
+      - "banking-skills/**"
+      - "scripts/**"
+      - "package*.json"
+      - ".github/workflows/**"
   pull_request:
     branches:
       - main
     paths:
-      - "appPackage/**"
-      - "m365agents.yml"
-      - "wiqd.plugin.json"
+      - "legal/**"
+      - "lending/**"
+      - "operations/**"
+      - "technology/**"
+      - "banking-skills/**"
+      - "scripts/**"
+      - "package*.json"
       - ".github/workflows/**"
 
 permissions:
@@ -17,10 +33,13 @@ jobs:
   validate:
     name: Validate plugin
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Configure Node.js
         uses: actions/setup-node@v4
@@ -28,27 +47,18 @@ jobs:
           node-version: "24.15.0"
           package-manager-cache: false
 
-      - name: Show Node version
-        run: node --version
-
       - name: Install Work IQ Dev Tools
         run: |
-          npm install -g @microsoft/wiqd
-          wiqd --version
+          npm install -g @microsoft/wiqd@0.24.0
+          wiqd --version --skill wiqd --workflow plugin
 
-      - name: Verify WIQD
-        run: |
-          wiqd --version
-          wiqd doctor
+      - name: Install source check dependencies
+        run: npm ci
 
-      - name: Run static plugin validation
-        shell: bash
-        env:
-          CI_ENABLED: 'true'
-          M365_ACCOUNT_NAME: ${{ secrets.M365_ACCOUNT_NAME }}
-          M365_ACCOUNT_PASSWORD: ${{ secrets.M365_ACCOUNT_PASSWORD }}
+      - name: Test source and ZIP checks
+        run: npm test
+
+      - name: Stage skills and validate source offline
+        shell: pwsh
         run: |
-          wiqd plugin validate \
-            --path . \
-            --env dev \
-            --json
+          ./scripts/plugin.ps1 -ProjectPath (Join-Path $env:RUNNER_TEMP 'banking-skills')
