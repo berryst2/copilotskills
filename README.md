@@ -18,16 +18,29 @@ GitHub-hosted Ubuntu. Pushes to `main` and manual runs on `main` use the
 self-hosted runner labelled `self-hosted`, `Linux`, `X64`; manual runs on other
 branches are skipped so they cannot execute unmerged code on that runner.
 All runs use Node 24.15.0, run the source/ZIP checker tests and check all source folders.
-It does not install/run WIQD, stage a plugin, or receive deployment credentials.
-These are repository checks, not WIQD validation. WIQD source validation remains
-a required release gate on the prepared runner.
+The source-check job does not install/run WIQD, stage a plugin, or receive
+deployment credentials. These are repository checks, not WIQD validation.
+
+After successful source checks on a push or manual run on `main`, a dependent
+deployment job calls the reusable packaging workflow. Subject to the `dev`
+environment's approval gates, it runs WIQD source validation, provisions the
+existing shared dev deployment, revalidates source, packages and verifies the
+ZIP, validates that exact exported ZIP with Microsoft's TDP service, and runs
+`wiqd plugin publish` to submit to the organization catalog for tenant
+administrator approval. PRs never invoke deployment, and failed/skipped source
+checks block it. The called workflow checks out the same triggering revision.
+
+Automatic deployment requires the three existing app IDs below. It never
+creates a new app automatically. Bootstrap once using the manual packaging
+workflow, save the IDs, then subsequent successful main validations deploy
+automatically. Updating these workflows does not itself execute a deployment.
 
 WIQD source validation does not provide full skill-only plugin validation.
 Repository checks cover source structure and local Markdown links; release
 checks verify every packaged skill/resource byte and reject unexpected ZIP
 files. Neither proves runtime behavior or Marketplace acceptance.
 
-## Manual packaging
+## Packaging and organization catalog submission
 
 ### Prepare a dedicated runner
 
@@ -76,11 +89,15 @@ Set these environment variables to your real publisher details:
 
 Merge the workflows onto `main`, then select **Actions > Package Microsoft 365
 plugin > Run workflow**. Select `main`.
+The same workflow can also be called automatically after validation.
 
 For the first deployment only, check `create_new_app`. This authorizes creation
 of cloud resources in the shared `dev` environment. The scaffold's provision
 lifecycle registers/updates the app and publishes a shared deployment; it is
 not an offline ZIP build or tenant-catalog submission.
+For manual runs, `publish` defaults to false (package only). Check it explicitly
+to validate the exported ZIP with Microsoft and submit to the organization
+catalog. Automatic deployment from the validation workflow sets `publish: true`.
 
 Download `banking-skills-provisioning-ids` and save its three non-secret values
 as environment variables `TEAMS_APP_ID`, `M365_TITLE_ID` and `M365_APP_ID`.
@@ -92,9 +109,15 @@ If a mutation fails before a receipt is written, inspect the dev app before
 rerunning; do not assume nothing was created.
 
 Download `banking-skills-plugin` for the verified ZIP and SHA-256 checksum.
-The pipeline does not submit to the tenant catalog, share with an audience or
-upload the ZIP for TDP/Marketplace validation. Run those as separately approved
-operations. No release was executed while implementing this pipeline.
+When publication is enabled, `banking-skills-publication` contains the successful
+submission receipt. Success means submitted for tenant administrator approval,
+not approved, available tenant-wide, or published to the public Marketplace.
+TDP package validation uploads the exported ZIP and may require separately
+qualified authentication/service access. It does not evaluate skill behavior.
+WIQD publish rebuilds its upload from the staged project; validating the exported
+ZIP does not prove that publish uploads those exact same bytes.
+No audience sharing or public Marketplace submission is performed. No live
+release was executed while implementing this pipeline.
 
 Fresh GitHub-hosted runners cannot use this release path without an officially
 supported consent setup. Do not add automated acceptance, fake receipts or copy

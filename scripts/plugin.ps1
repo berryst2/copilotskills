@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory)][string]$ProjectPath,
     [switch]$Provision,
-    [switch]$CreateNewApp
+    [switch]$CreateNewApp,
+    [switch]$Publish
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,6 +11,7 @@ $root = Split-Path $PSScriptRoot -Parent
 $ProjectPath = [IO.Path]::GetFullPath($ProjectPath)
 if (Test-Path -LiteralPath $ProjectPath) { throw "Use a new staging directory: $ProjectPath" }
 if ($CreateNewApp -and -not $Provision) { throw 'CreateNewApp requires Provision.' }
+if ($Publish -and -not $Provision) { throw 'Publish requires Provision.' }
 
 & (Join-Path $PSScriptRoot 'check-wiqd.ps1')
 
@@ -112,3 +114,15 @@ Invoke-Wiqd @('plugin', 'package', '--path', $ProjectPath, '--env', 'dev', '--ou
 if ($LASTEXITCODE -ne 0) { throw 'Final ZIP content verification failed.' }
 Get-FileHash -LiteralPath $zip -Algorithm SHA256 | Select-Object Hash |
     ConvertTo-Json | Set-Content -LiteralPath (Join-Path $dist 'checksum.json') -Encoding utf8
+
+if ($Publish) {
+    Invoke-Wiqd @('plugin', 'validate', '--mode', 'package', '--package-file', $zip,
+        '--path', $ProjectPath, '--env', 'dev') | Out-Null
+    $publication = Invoke-Wiqd @('plugin', 'publish', '--path', $ProjectPath, '--env', 'dev')
+    @{
+        status = 'submitted_for_admin_approval'
+        environment = 'dev'
+        correlationId = $publication.correlationId
+    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $dist 'publication-receipt.json') -Encoding utf8
+    Write-Host 'Plugin submitted to the organization catalog for tenant administrator approval; it is not yet approved.'
+}

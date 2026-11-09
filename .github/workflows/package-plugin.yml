@@ -8,6 +8,19 @@ on:
         type: boolean
         default: false
         required: true
+      publish:
+        description: "Validate the ZIP with Microsoft and submit to the organization catalog for admin approval"
+        type: boolean
+        default: false
+        required: true
+  workflow_call:
+    inputs:
+      create_new_app:
+        type: boolean
+        default: false
+      publish:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -18,7 +31,7 @@ concurrency:
 
 jobs:
   package:
-    name: Provision dev and build ZIP
+    name: Provision, package and optionally submit
     if: github.ref == 'refs/heads/main'
     environment: dev
     runs-on: [self-hosted, Linux, X64]
@@ -38,7 +51,7 @@ jobs:
         run: npm ci
       - name: Test source and ZIP checks
         run: npm test
-      - name: Stage, validate, provision and package
+      - name: Stage, validate, provision, package and optionally submit
         id: build
         shell: pwsh
         env:
@@ -53,10 +66,12 @@ jobs:
           M365_TITLE_ID: ${{ vars.M365_TITLE_ID }}
           M365_APP_ID: ${{ vars.M365_APP_ID }}
           CREATE_NEW_APP: ${{ inputs.create_new_app }}
+          PUBLISH_PLUGIN: ${{ inputs.publish }}
         run: |
           $project = Join-Path $env:RUNNER_TEMP ("banking-skills-{0}-{1}" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT)
           ./scripts/plugin.ps1 -ProjectPath $project `
-            -Provision -CreateNewApp:($env:CREATE_NEW_APP -eq 'true')
+            -Provision -CreateNewApp:($env:CREATE_NEW_APP -eq 'true') `
+            -Publish:($env:PUBLISH_PLUGIN -eq 'true')
       - name: Preserve non-secret provisioning IDs
         if: always() && steps.build.outcome != 'skipped'
         uses: actions/upload-artifact@v4
@@ -73,6 +88,13 @@ jobs:
             dist/checksum.json
           if-no-files-found: error
           retention-days: 14
+      - name: Upload organization catalog submission receipt
+        if: success() && inputs.publish
+        uses: actions/upload-artifact@v4
+        with:
+          name: banking-skills-publication
+          path: dist/publication-receipt.json
+          if-no-files-found: error
       - name: Clean staged project and deployment environment files
         if: always()
         shell: pwsh

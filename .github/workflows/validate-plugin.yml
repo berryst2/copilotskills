@@ -56,3 +56,13 @@ jobs:
 
       - name: Check all skill source folders
         run: npm run check
+
+  deploy:
+    name: Package and submit plugin
+    needs: validate
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    uses: ./.github/workflows/package-plugin.yml
+    with:
+      create_new_app: false
+      publish: true
+    secrets: inherit
