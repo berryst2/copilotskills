@@ -1,0 +1,105 @@
+name: Package Microsoft 365 plugin
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_new_app:
+        description: "Explicitly create a new dev app (first run only; creates cloud resources)"
+        type: boolean
+        default: false
+        required: true
+      publish:
+        description: "Validate the ZIP with Microsoft and submit to the organization catalog for admin approval"
+        type: boolean
+        default: false
+        required: true
+  workflow_call:
+    inputs:
+      create_new_app:
+        type: boolean
+        default: false
+      publish:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: banking-skills-dev
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Provision, package and optionally submit
+    if: github.ref == 'refs/heads/main'
+    environment: dev
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.15.0"
+          package-manager-cache: false
+      - name: Verify prepared runner and human EULA acceptance
+        shell: pwsh
+        run: ./scripts/check-wiqd.ps1
+      - name: Install source check dependencies
+        run: npm ci
+      - name: Test source and ZIP checks
+        run: npm test
+      - name: Stage, validate, provision, package and optionally submit
+        id: build
+        shell: pwsh
+        env:
+          CI_ENABLED: 'true'
+          M365_ACCOUNT_NAME: ${{ secrets.M365_ACCOUNT_NAME }}
+          M365_ACCOUNT_PASSWORD: ${{ secrets.M365_ACCOUNT_PASSWORD }}
+          PLUGIN_DEVELOPER_NAME: ${{ vars.PLUGIN_DEVELOPER_NAME }}
+          PLUGIN_WEBSITE_URL: ${{ vars.PLUGIN_WEBSITE_URL }}
+          PLUGIN_PRIVACY_URL: ${{ vars.PLUGIN_PRIVACY_URL }}
+          PLUGIN_TERMS_URL: ${{ vars.PLUGIN_TERMS_URL }}
+          TEAMS_APP_ID: ${{ vars.TEAMS_APP_ID }}
+          M365_TITLE_ID: ${{ vars.M365_TITLE_ID }}
+          M365_APP_ID: ${{ vars.M365_APP_ID }}
+          CREATE_NEW_APP: ${{ inputs.create_new_app }}
+          PUBLISH_PLUGIN: ${{ inputs.publish }}
+        run: |
+          $project = Join-Path $env:RUNNER_TEMP ("banking-skills-{0}-{1}" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT)
+          ./scripts/plugin.ps1 -ProjectPath $project `
+            -Provision -CreateNewApp:($env:CREATE_NEW_APP -eq 'true') `
+            -Publish:($env:PUBLISH_PLUGIN -eq 'true')
+      - name: Preserve non-secret provisioning IDs
+        if: always() && steps.build.outcome != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: banking-skills-provisioning-ids
+          path: dist/provisioning-ids.json
+          if-no-files-found: ignore
+      - name: Upload verified plugin ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: banking-skills-plugin
+          path: |
+            dist/banking-skills.zip
+            dist/checksum.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload organization catalog submission receipt
+        if: success() && inputs.publish
+        uses: actions/upload-artifact@v4
+        with:
+          name: banking-skills-publication
+          path: dist/publication-receipt.json
+          if-no-files-found: error
+      - name: Clean staged project and deployment environment files
+        if: always()
+        shell: pwsh
+        run: |
+          $project = Join-Path $env:RUNNER_TEMP ("banking-skills-{0}-{1}" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT)
+          if (Test-Path -LiteralPath $project) {
+            Remove-Item -LiteralPath $project -Recurse -Force
+          }
