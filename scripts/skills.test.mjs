@@ -110,10 +110,16 @@ test('workflow YAML parses with expected secret-free CI and gated release', () =
     if (file === 'validate-plugin.yml') {
       assert.ok(!JSON.stringify(workflow).includes('secrets.'));
       assert.ok(workflow.on.pull_request.paths.includes('legal/**'));
-      assert.equal(workflow.jobs.validate['runs-on'], 'ubuntu-latest');
+      assert.equal(workflow.jobs.validate.if,
+        "github.event_name == 'pull_request' || github.ref == 'refs/heads/main'");
+      const routing = workflow.jobs.validate['runs-on'].match(
+        /^\$\{\{ fromJSON\(github\.event_name == 'pull_request' && '([^']+)' \|\| '([^']+)'\) \}\}$/);
+      assert.ok(routing, 'Runner selection must keep PRs hosted and trusted jobs self-hosted');
+      assert.deepEqual(JSON.parse(routing[1]), ['ubuntu-latest']);
+      assert.deepEqual(JSON.parse(routing[2]), ['self-hosted', 'Linux', 'X64']);
       assert.ok(!workflow.jobs.validate.steps.some(step => /wiqd|plugin\.ps1/.test(step.run ?? '')));
     } else {
-      assert.deepEqual(workflow.jobs.package['runs-on'], ['self-hosted', 'linux', 'x64', 'wiqd']);
+      assert.deepEqual(workflow.jobs.package['runs-on'], ['self-hosted', 'Linux', 'X64']);
       assert.equal(workflow.jobs.package.environment, 'dev');
       assert.equal(workflow.jobs.package.if, "github.ref == 'refs/heads/main'");
       assert.equal(workflow.concurrency['cancel-in-progress'], false);
@@ -136,14 +142,22 @@ test('runner preflight accepts existing consent and rejects missing consent with
         if ($args -contains '--version') { return '0.24.0' }
         return '{"status":"success","data":{"wiqd":{"state":"${state}"}}}'
       }
-      & '${script}'
+      try {
+        & '${script}'
+      } catch {
+        @{ message = $_.Exception.Message } | ConvertTo-Json -Compress
+        exit 1
+      }
     `], { encoding: 'utf8' });
     assert.ifError(result.error);
     if (state === 'accepted') {
       assert.equal(result.status, 0, result.stderr);
     } else {
-      assert.notEqual(result.status, 0);
-      assert.match(result.stderr, /human must review and accept/i);
+      assert.equal(result.status, 1, result.stderr);
+      const error = JSON.parse(result.stdout);
+      assert.match(error.message, /human must review and accept/i);
+      assert.match(error.message, /https:\/\/aka\.ms\/wiqd\/eula/);
+      assert.match(error.message, /CI cannot accept/);
     }
   }
 });

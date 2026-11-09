@@ -13,8 +13,11 @@ registers every source skill using WIQD and copies complete skill folders into
 ## Continuous integration
 
 `Validate banking skill sources` runs on relevant pull requests and pushes to
-`main`, and can also be run manually. It uses Node 24.15.0 on GitHub-hosted
-Ubuntu, runs the source/ZIP checker tests and checks all source folders.
+`main`, and can also be run manually on `main`. Pull-request checks run on
+GitHub-hosted Ubuntu. Pushes to `main` and manual runs on `main` use the
+self-hosted runner labelled `self-hosted`, `Linux`, `X64`; manual runs on other
+branches are skipped so they cannot execute unmerged code on that runner.
+All runs use Node 24.15.0, run the source/ZIP checker tests and check all source folders.
 It does not install/run WIQD, stage a plugin, or receive deployment credentials.
 These are repository checks, not WIQD validation. WIQD source validation remains
 a required release gate on the prepared runner.
@@ -28,8 +31,9 @@ files. Neither proves runtime behavior or Marketplace acceptance.
 
 ### Prepare a dedicated runner
 
-The release workflow targets a persistent Linux x64 self-hosted runner with the
-custom label `wiqd`. Install Node 24.15.0, PowerShell 7 and WIQD 0.24.0 during
+The release workflow targets a persistent Linux x64 self-hosted runner with
+labels `self-hosted`, `Linux`, `X64`. No custom `wiqd` label is required.
+Install Node 24.15.0, PowerShell 7 and WIQD 0.24.0 during
 human runner setup, and ensure `wiqd` is on the runner service account's PATH.
 
 A human must review the [WIQD EULA](https://aka.ms/wiqd/eula) and, if they agree,
@@ -39,7 +43,7 @@ Acceptance on your development machine does not establish acceptance on a
 different runner account. CI never performs acceptance. The release job checks
 the pinned version and existing acceptance before injecting credentials.
 
-Keep this runner restricted to trusted release workflows on `main`; do not run
+Keep this runner restricted to trusted source checks and release workflows on `main`; do not run
 pull-request code on it. For a public repository, use your organization's
 approved self-hosted-runner isolation and access controls. The hosted PR job
 stays separate. Runner registration/security setup is an administrator task,

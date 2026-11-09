@@ -32,7 +32,8 @@ permissions:
 jobs:
   validate:
     name: Check repository skill sources
-    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["self-hosted", "Linux", "X64"]') }}
     timeout-minutes: 15
 
     steps:
