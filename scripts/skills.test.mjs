@@ -154,14 +154,20 @@ test('workflow YAML parses with expected secret-free CI and gated release', () =
   }
 });
 
-test('runner preflight accepts existing consent and rejects missing consent without accepting', () => {
+test('runner preflight enforces the pinned version and existing consent without accepting', () => {
   const script = join(repository, 'scripts', 'check-wiqd.ps1').replaceAll("'", "''");
-  for (const state of ['accepted', 'required']) {
+  for (const [version, state] of [
+    ['0.25.0', 'accepted'],
+    ['0.25.0', 'required'],
+    ['0.24.0', 'accepted'],
+    ['0.26.0', 'accepted']
+  ]) {
     const result = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', `
       function wiqd {
         if ($args -contains 'accept') { throw 'Test must never perform acceptance.' }
         $global:LASTEXITCODE = 0
-        if ($args -contains '--version') { return '0.24.0' }
+        if ($args -contains '--version') { return '${version}' }
+        if ('${version}' -ne '0.25.0') { throw 'Version mismatch must stop before checking consent.' }
         return '{"status":"success","data":{"wiqd":{"state":"${state}"}}}'
       }
       try {
@@ -172,7 +178,12 @@ test('runner preflight accepts existing consent and rejects missing consent with
       }
     `], { encoding: 'utf8' });
     assert.ifError(result.error);
-    if (state === 'accepted') {
+    if (version !== '0.25.0') {
+      assert.equal(result.status, 1, result.stderr);
+      const error = JSON.parse(result.stdout);
+      assert.match(error.message, /must have WIQD 0\.25\.0/);
+      assert.ok(error.message.includes(`version probe returned '${version}'`));
+    } else if (state === 'accepted') {
       assert.equal(result.status, 0, result.stderr);
     } else {
       assert.equal(result.status, 1, result.stderr);
@@ -238,7 +249,7 @@ test('publication follows verified packaging and stops on validation or publish 
         function wiqd {
           Add-Content -LiteralPath (Join-Path $env:TEST_ROOT 'commands.jsonl') -Value (ConvertTo-Json -InputObject @($args) -Compress)
           $global:LASTEXITCODE = 0
-          if ($args -contains '--version') { return '0.24.0' }
+          if ($args -contains '--version') { return '0.25.0' }
           if ($args[0] -eq 'eula') { return '{"status":"success","data":{"wiqd":{"state":"accepted"}}}' }
           if (($env:TEST_FAILURE -eq 'package-validation' -and $args[1] -eq 'validate' -and $args -contains 'package') -or
               ($env:TEST_FAILURE -eq 'publish' -and $args[1] -eq 'publish')) {

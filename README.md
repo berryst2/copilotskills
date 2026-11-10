@@ -46,7 +46,7 @@ files. Neither proves runtime behavior or Marketplace acceptance.
 
 The release workflow targets a persistent Linux x64 self-hosted runner with
 labels `self-hosted`, `Linux`, `X64`. No custom `wiqd` label is required.
-Install Node 24.15.0, PowerShell 7 and WIQD 0.24.0 during
+Install Node 24.15.0, PowerShell 7 and WIQD 0.25.0 during
 human runner setup, and ensure both `pwsh` and `wiqd` are on the runner service
 account's PATH. PowerShell is also required by `npm test` in the source-check
 job; these tests exercise the PowerShell scripts without live deployment.
@@ -73,6 +73,11 @@ Confirm `wiqd eula status --json` reports `data.wiqd.state` as `accepted`.
 Acceptance on your development machine does not establish acceptance on a
 different runner account. CI never performs acceptance. The release job checks
 the pinned version and existing acceptance before injecting credentials.
+
+The WIQD version check is exact, not a minimum-version check. Keep the runner
+on 0.25.0; a future upgrade needs a corresponding repository pin and test update.
+After upgrading, verify EULA status under the runner account. If the CLI requires
+renewed consent, a human must review and accept outside CI.
 
 Keep this runner restricted to trusted source checks and release workflows on `main`; do not run
 pull-request code on it. For a public repository, use your organization's
@@ -145,7 +150,7 @@ closed rather than repairing consent automatically.
 
 ## Local checks
 
-Install Node.js 24.15.0 or newer, PowerShell 7 and WIQD 0.24.0, then:
+Install Node.js 24.15.0 or newer, PowerShell 7 and WIQD 0.25.0, then:
 
 ```powershell
 npm ci
