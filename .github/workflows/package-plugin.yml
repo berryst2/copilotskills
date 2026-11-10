@@ -13,6 +13,11 @@ on:
         type: boolean
         default: false
         required: true
+      version_floor:
+        description: "First migration/recovery only: highest version already uploaded to Microsoft"
+        type: string
+        default: ""
+        required: false
   workflow_call:
     inputs:
       create_new_app:
@@ -24,6 +29,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: banking-skills-dev
@@ -75,6 +81,61 @@ jobs:
         run: npm ci
       - name: Test source and ZIP checks
         run: npm test
+      - name: Allocate next app version
+        id: version
+        uses: actions/github-script@v7
+        env:
+          VERSION_FLOOR: ${{ inputs.version_floor }}
+          CREATE_NEW_APP: ${{ inputs.create_new_app }}
+        with:
+          script: |
+            const { readFileSync, writeFileSync } = require('node:fs');
+            const { join } = require('node:path');
+            const { pathToFileURL } = require('node:url');
+            const { nextReleaseVersion, versionRecordPrefix } = await import(
+              pathToFileURL(join(process.env.GITHUB_WORKSPACE, 'scripts', 'release-version.mjs')).href);
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              ...context.repo, per_page: 100
+            });
+            const names = [];
+            const runs = new Map();
+            for (const artifact of artifacts) {
+              if (!artifact.name.startsWith(versionRecordPrefix) || artifact.expired) continue;
+              const runId = artifact.workflow_run?.id;
+              if (!runId) throw new Error('Version record has no owning workflow run.');
+              if (!runs.has(runId)) {
+                runs.set(runId, (await github.rest.actions.getWorkflowRun({
+                  ...context.repo, run_id: runId
+                })).data);
+              }
+              const run = runs.get(runId);
+              if (run.head_branch === 'main' &&
+                  run.head_repository?.full_name === `${context.repo.owner}/${context.repo.repo}` &&
+                  ['push', 'workflow_dispatch'].includes(run.event) &&
+                  ['.github/workflows/package-plugin.yml', '.github/workflows/validate-plugin.yml'].includes(run.path)) {
+                names.push(artifact.name);
+              }
+            }
+            const manifest = JSON.parse(readFileSync(
+              join(process.env.GITHUB_WORKSPACE, 'banking-skills', 'appPackage', 'manifest.json'), 'utf8'));
+            const version = nextReleaseVersion(manifest.version, names,
+              process.env.VERSION_FLOOR, process.env.CREATE_NEW_APP === 'true');
+            const receipt = join(process.env.RUNNER_TEMP,
+              `banking-skills-version-${context.runId}-${process.env.GITHUB_RUN_ATTEMPT}.json`);
+            writeFileSync(receipt, JSON.stringify({
+              version, runId: context.runId, attempt: process.env.GITHUB_RUN_ATTEMPT,
+              commit: context.sha, environment: 'dev'
+            }, null, 2));
+            core.setOutput('version', version);
+            core.setOutput('receipt', receipt);
+            core.info(`Reserved app version ${version}; failures must not reuse it.`);
+      - name: Persist version reservation before cloud changes
+        uses: actions/upload-artifact@v4
+        with:
+          name: banking-skills-dev-version-${{ steps.version.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.version.outputs.receipt }}
+          if-no-files-found: error
+          retention-days: 90
       - name: Stage, validate, provision, package and optionally submit
         id: build
         shell: pwsh
@@ -91,9 +152,11 @@ jobs:
           M365_APP_ID: ${{ vars.M365_APP_ID }}
           CREATE_NEW_APP: ${{ inputs.create_new_app }}
           PUBLISH_PLUGIN: ${{ inputs.publish }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           $project = Join-Path $env:RUNNER_TEMP ("banking-skills-{0}-{1}" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT)
           ./scripts/plugin.ps1 -ProjectPath $project `
+            -ReleaseVersion $env:RELEASE_VERSION `
             -Provision -CreateNewApp:($env:CREATE_NEW_APP -eq 'true') `
             -Publish:($env:PUBLISH_PLUGIN -eq 'true')
       - name: Preserve non-secret provisioning IDs
@@ -126,4 +189,8 @@ jobs:
           $project = Join-Path $env:RUNNER_TEMP ("banking-skills-{0}-{1}" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT)
           if (Test-Path -LiteralPath $project) {
             Remove-Item -LiteralPath $project -Recurse -Force
+          }
+          $reservation = Join-Path $env:RUNNER_TEMP ("banking-skills-version-{0}-{1}.json" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT)
+          if (Test-Path -LiteralPath $reservation -PathType Leaf) {
+            Remove-Item -LiteralPath $reservation
           }

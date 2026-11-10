@@ -133,6 +133,50 @@ not an offline ZIP build or tenant-catalog submission.
 For manual runs, `publish` defaults to false (package only). Check it explicitly
 to validate the exported ZIP with Microsoft and submit to the organization
 catalog. Automatic deployment from the validation workflow sets `publish: true`.
+With existing IDs and `publish: true`, the pipeline skips development
+provisioning and packages, validates and submits directly. First-time creation
+still provisions before packaging. With `publish: false`, the workflow
+provisions/updates the development app before packaging; it is not offline.
+
+### Automatic release versions
+
+Every deployment attempt reserves a new `major.minor.patch` app version before
+any cloud changes, including attempts that fail. The reservation is uploaded as
+`banking-skills-dev-version-<version>-<run>-<attempt>` and is shared by automatic
+and manual releases, across runners. The `banking-skills-dev` concurrency group
+serializes allocation and deployment. The next version is greater than the
+source manifest, all retained trusted reservations, and any supplied floor.
+Only main-branch push/manual runs of the two release workflows are trusted.
+The source manifest is unchanged; the reserved version is applied to staging
+and retained in the ZIP and publication receipt. No automatic retry is added.
+
+For an existing app's first run after adopting this versioning:
+
+1. Check the highest version already uploaded to Microsoft for this app,
+   including development and tenant-catalog versions. Teams Developer Portal
+   and your organization's app administrator can help confirm it.
+2. Open **Actions > Package Microsoft 365 plugin > Run workflow** on `main`.
+3. Leave `create_new_app` unchecked and set `version_floor` to that confirmed
+   version (for example, `1.0.1` only if that is the actual highest version).
+4. Choose `publish` if you want catalog submission. The pipeline reserves a
+   higher version, then performs the selected operation.
+5. Subsequent runs need no floor or manual manifest-version edits.
+
+The pipeline does not query Microsoft's current version and cannot safely
+infer it from this error. If it is unknown, confirm it before initializing;
+do not guess, change IDs, or create another app to bypass a version conflict.
+New-app bootstrap can initialize from the source version.
+Reservations have 90-day retention (subject to repository limits). Do not
+delete them. If all records expire or are removed, existing-app automation
+stops before deployment until a human reseeds it with the confirmed highest
+version. If a higher version is uploaded outside this pipeline, supply that
+version as `version_floor` on a manual run before resuming automation.
+Deleting only the latest records can hide consumed versions; always reseed
+after deleting any reservation records. Treat these artifacts as release
+state, not disposable build outputs. API, reservation upload, validation, and
+publication errors stop the release rather than silently falling back.
+
+### Reuse the app identity and retrieve artifacts
 
 Download `banking-skills-provisioning-ids` and save its three non-secret values
 as environment variables `TEAMS_APP_ID`, `M365_TITLE_ID` and `M365_APP_ID`.

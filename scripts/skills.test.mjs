@@ -4,9 +4,78 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, cpSync, ex
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { zipSync, strToU8 } from 'fflate';
+import { createRequire } from 'node:module';
+import { zipSync, unzipSync, strToU8 } from 'fflate';
 import { parseDocument } from 'yaml';
 import { discover, verify, repository } from './skills.mjs';
+import { nextReleaseVersion, versionRecordPrefix } from './release-version.mjs';
+
+test('release versions advance across workflows, failed attempts, and reruns', () => {
+  const record = (version, run = 1, attempt = 1) => `${versionRecordPrefix}${version}-${run}-${attempt}`;
+  assert.throws(() => nextReleaseVersion('1.0.0', []), /highest version already uploaded/);
+  assert.equal(nextReleaseVersion('1.0.0', [], '', true), '1.0.1');
+  assert.equal(nextReleaseVersion('1.0.0', [], '1.4.9'), '1.4.10');
+  assert.equal(nextReleaseVersion('1.0.0',
+    [record('1.4.10', 100), record('1.4.9', 90), 'unrelated']), '1.4.11');
+  assert.equal(nextReleaseVersion('1.0.0',
+    [record('1.4.10', 100), record('1.4.11', 100, 2)]), '1.4.12');
+  assert.equal(nextReleaseVersion('2.0.0', [record('1.4.11')]), '2.0.1');
+  assert.equal(nextReleaseVersion('1.0.0', [record('1.0.65535')]), '1.1.0');
+  assert.equal(nextReleaseVersion('1.0.0', [record('1.65535.65535')]), '2.0.0');
+  assert.throws(() => nextReleaseVersion('65535.65535.65535', [], '', true), /exhausted/);
+  for (const value of ['1.0', '01.0.0', '1.0.0-beta', '1.0.65536', '1.0.0\n']) {
+    assert.throws(() => nextReleaseVersion(value, [], '', true), /version/);
+  }
+  assert.throws(() => nextReleaseVersion('1.0.0', [record('1.0.65536')]), /65535/);
+  assert.throws(() => nextReleaseVersion('1.0.0', [`${versionRecordPrefix}broken`]), /Invalid/);
+});
+
+test('workflow allocation trusts only main release runs and persists its selected version', async t => {
+  const root = fixture(t);
+  const workflow = parseDocument(readFileSync(
+    join(repository, '.github', 'workflows', 'package-plugin.yml'), 'utf8')).toJS();
+  const step = workflow.jobs.package.steps.find(step => step.id === 'version');
+  const script = new (Object.getPrototypeOf(async function () {}).constructor)(
+    'require', 'github', 'context', 'core', 'process', step.with.script);
+  const artifacts = [
+    { name: `${versionRecordPrefix}1.0.5-1-1`, workflow_run: { id: 1 } },
+    { name: `${versionRecordPrefix}1.0.6-2-1`, workflow_run: { id: 2 } },
+    { name: `${versionRecordPrefix}9.0.0-3-1`, workflow_run: { id: 3 } },
+    { name: `${versionRecordPrefix}9.0.0-4-1`, workflow_run: { id: 4 } },
+    { name: `${versionRecordPrefix}9.0.0-5-1`, workflow_run: { id: 5 } },
+    { name: `${versionRecordPrefix}9.0.0-6-1`, workflow_run: { id: 6 }, expired: true }
+  ];
+  const github = {
+    paginate: async () => artifacts,
+    rest: { actions: {
+      listArtifactsForRepo() {},
+      getWorkflowRun: async ({ run_id }) => ({ data: {
+        head_branch: 'main',
+        head_repository: { full_name: 'owner/repo' },
+        event: run_id === 3 ? 'pull_request' : 'workflow_dispatch',
+        path: run_id === 4 ? '.github/workflows/untrusted.yml' :
+          '.github/workflows/validate-plugin.yml',
+        ...(run_id === 5 ? { head_repository: { full_name: 'fork/repo' } } : {})
+      } })
+    } }
+  };
+  const outputs = {};
+  const env = {
+    GITHUB_WORKSPACE: repository, RUNNER_TEMP: root, GITHUB_RUN_ATTEMPT: '2',
+    VERSION_FLOOR: '', CREATE_NEW_APP: 'false'
+  };
+  await script(createRequire(import.meta.url), github,
+    { repo: { owner: 'owner', repo: 'repo' }, runId: 7, sha: 'test-commit' },
+    { setOutput: (key, value) => { outputs[key] = value; }, info() {} }, { env });
+  assert.equal(outputs.version, '1.0.7');
+  assert.deepEqual(JSON.parse(readFileSync(outputs.receipt, 'utf8')), {
+    version: '1.0.7', runId: 7, attempt: '2', commit: 'test-commit', environment: 'dev'
+  });
+  artifacts.length = 0;
+  await assert.rejects(() => script(createRequire(import.meta.url), github,
+    { repo: { owner: 'owner', repo: 'repo' }, runId: 7 },
+    { setOutput() {}, info() {} }, { env }), /No shared version record/);
+});
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'banking-skills-test-'));
@@ -134,6 +203,7 @@ test('workflow YAML parses with expected secret-free CI and gated release', () =
       assert.equal(workflow.jobs.deploy.uses, './.github/workflows/package-plugin.yml');
       assert.deepEqual(workflow.jobs.deploy.with, { create_new_app: false, publish: true });
       assert.equal(workflow.jobs.deploy.secrets, 'inherit');
+      assert.equal(workflow.jobs.deploy.permissions.actions, 'read');
     } else {
       assert.equal(workflow.on.workflow_call.inputs.publish.type, 'boolean');
       assert.equal(workflow.on.workflow_dispatch.inputs.publish.default, false);
@@ -148,6 +218,14 @@ test('workflow YAML parses with expected secret-free CI and gated release', () =
       assert.equal(steps[executablePath].env.WIQD_BIN_DIR, '${{ vars.WIQD_BIN_DIR }}');
       assert.match(steps[executablePath].run, /Add-Content -LiteralPath \$env:GITHUB_PATH/);
       const deploy = steps.findIndex(step => step.env?.M365_ACCOUNT_PASSWORD);
+      const allocate = steps.findIndex(step => step.id === 'version');
+      const reserve = steps.findIndex(step => step.name === 'Persist version reservation before cloud changes');
+      assert.ok(tests < allocate && allocate < reserve && reserve < deploy);
+      assert.equal(workflow.permissions.actions, 'read');
+      assert.equal(steps[reserve].uses, 'actions/upload-artifact@v4');
+      assert.equal(steps[reserve].with['if-no-files-found'], 'error');
+      assert.equal(steps[deploy].env.RELEASE_VERSION, '${{ steps.version.outputs.version }}');
+      assert.match(steps[deploy].run, /-ReleaseVersion \$env:RELEASE_VERSION/);
       assert.ok(preflight >= 0 && preflight < deploy);
       assert.equal(steps[deploy].env.PUBLISH_PLUGIN, '${{ inputs.publish }}');
       assert.match(steps[deploy].run, /-Publish:/);
@@ -228,8 +306,15 @@ test('runner preflight enforces the pinned version and existing consent without 
 });
 
 test('publication follows verified packaging and stops on validation or publish failures', async t => {
-  for (const failure of ['', 'package-validation', 'publish']) {
-    await t.test(failure || 'successful submission', t => {
+  for (const [label, failure, bootstrap, publish] of [
+    ['existing app submission', '', false, true],
+    ['package-validation', 'package-validation', false, true],
+    ['publish', 'publish', false, true],
+    ['first-time provisioning', '', true, false],
+    ['first-time provisioning and submission', '', true, true],
+    ['provision failure', 'provision', true, true]
+  ]) {
+    await t.test(label, t => {
       const root = fixture(t);
       for (const folder of ['scripts', 'banking-skills']) {
         cpSync(join(repository, folder), join(root, folder), { recursive: true });
@@ -239,6 +324,10 @@ test('publication follows verified packaging and stops on validation or publish 
           join(root, 'node_modules', dependency), { recursive: true });
       }
       writeFileSync(join(root, 'package.json'), '{"private":true,"type":"module"}');
+      mkdirSync(join(root, 'dist'));
+      for (const name of ['provisioning-ids.json', 'banking-skills.zip', 'checksum.json', 'publication-receipt.json']) {
+        writeFileSync(join(root, 'dist', name), 'stale output from previous run');
+      }
       writeFileSync(join(root, 'pack.mjs'), `
         import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
         import { join, relative, sep } from 'node:path';
@@ -265,6 +354,8 @@ test('publication follows verified packaging and stops on validation or publish 
         ...process.env,
         TEST_ROOT: root,
         TEST_FAILURE: failure,
+        TEST_BOOTSTRAP: String(bootstrap),
+        TEST_PUBLISH: String(publish),
         CI_ENABLED: 'true',
         M365_ACCOUNT_NAME: 'test-account',
         M365_ACCOUNT_PASSWORD: 'test-fixture-not-a-credential',
@@ -276,6 +367,11 @@ test('publication follows verified packaging and stops on validation or publish 
         M365_TITLE_ID: 'test-title',
         M365_APP_ID: 'test-app'
       };
+      if (bootstrap) {
+        delete env.TEAMS_APP_ID;
+        delete env.M365_TITLE_ID;
+        delete env.M365_APP_ID;
+      }
       delete env.M365_REFRESH_TOKEN;
       const result = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', `
         function wiqd {
@@ -287,6 +383,16 @@ test('publication follows verified packaging and stops on validation or publish 
               ($env:TEST_FAILURE -eq 'publish' -and $args[1] -eq 'publish')) {
             $global:LASTEXITCODE = 1
             return '{"status":"error","error":{"message":"Expected test failure"}}'
+          }
+          if ($args[1] -eq 'provision') {
+            if ($env:TEST_FAILURE -eq 'provision') {
+              $global:LASTEXITCODE = 1
+              return '{"status":"error","error":{"message":"Expected provision failure"}}'
+            }
+            $project = $args[[Array]::IndexOf($args, '--path') + 1]
+            $env:TEAMS_APP_ID = '01234567-89ab-4cde-8f01-23456789abcd'
+            Add-Content -LiteralPath (Join-Path $project 'env/.env.dev') -Value @(
+              "TEAMS_APP_ID=$env:TEAMS_APP_ID", 'M365_TITLE_ID=test-title', 'M365_APP_ID=test-app')
           }
           if ($args[1] -eq 'add') {
             $project = $args[[Array]::IndexOf($args, '--folder') + 1]
@@ -307,7 +413,7 @@ test('publication follows verified packaging and stops on validation or publish 
           }
           return '{"status":"success","correlationId":"test-correlation"}'
         }
-        & (Join-Path $env:TEST_ROOT 'scripts/plugin.ps1') -ProjectPath (Join-Path $env:TEST_ROOT 'staged') -Provision -Publish
+        & (Join-Path $env:TEST_ROOT 'scripts/plugin.ps1') -ProjectPath (Join-Path $env:TEST_ROOT 'staged') -Provision -ReleaseVersion '1.4.10' -CreateNewApp:($env:TEST_BOOTSTRAP -eq 'true') -Publish:($env:TEST_PUBLISH -eq 'true')
       `], { encoding: 'utf8', env, timeout: 60000 });
       assert.ifError(result.error);
       const commands = readFileSync(join(root, 'commands.jsonl'), 'utf8')
@@ -315,16 +421,42 @@ test('publication follows verified packaging and stops on validation or publish 
       const index = action => commands.findIndex(args => args[0] === 'plugin' && args[1] === action);
       const packageValidation = commands.findIndex(args =>
         args[1] === 'validate' && args.includes('package'));
-      assert.ok(index('provision') > index('validate'));
-      assert.ok(index('package') > index('provision'));
+      if (bootstrap) assert.ok(index('provision') > index('validate'));
+      else assert.equal(index('provision'), -1);
+      const stagedManifest = JSON.parse(readFileSync(join(root, 'staged', 'appPackage', 'manifest.json'), 'utf8').replace(/^\uFEFF/, ''));
+      assert.equal(stagedManifest.version, '1.4.10');
+      assert.equal(JSON.parse(readFileSync(join(root, 'banking-skills', 'appPackage', 'manifest.json'), 'utf8')).version,
+        JSON.parse(readFileSync(join(repository, 'banking-skills', 'appPackage', 'manifest.json'), 'utf8')).version);
+      const receipt = join(root, 'dist', 'publication-receipt.json');
+      if (failure === 'provision') {
+        assert.notEqual(result.status, 0);
+        assert.equal(index('package'), -1);
+        assert.equal(index('publish'), -1);
+        assert.equal(existsSync(receipt), false);
+        assert.equal(existsSync(join(root, 'dist', 'provisioning-ids.json')), false);
+        assert.equal(existsSync(join(root, 'dist', 'banking-skills.zip')), false);
+        return;
+      }
+      const packagedManifest = JSON.parse(new TextDecoder().decode(
+        unzipSync(readFileSync(join(root, 'dist', 'banking-skills.zip')))['manifest.json']));
+      assert.equal(packagedManifest.version, '1.4.10');
+      assert.ok(index('package') > index('validate'));
+      if (bootstrap) assert.ok(index('package') > index('provision'));
+      if (!publish) {
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(packageValidation, -1);
+        assert.equal(index('publish'), -1);
+        assert.equal(existsSync(receipt), false);
+        return;
+      }
       assert.ok(packageValidation > index('package'));
       assert.ok(existsSync(join(root, 'dist', 'checksum.json')));
-      const receipt = join(root, 'dist', 'publication-receipt.json');
       if (!failure) {
         assert.equal(result.status, 0, result.stderr);
         assert.ok(index('publish') > packageValidation);
         assert.equal(JSON.parse(readFileSync(receipt, 'utf8').replace(/^\uFEFF/, '')).status,
           'submitted_for_admin_approval');
+        assert.equal(JSON.parse(readFileSync(receipt, 'utf8').replace(/^\uFEFF/, '')).version, '1.4.10');
       } else {
         assert.notEqual(result.status, 0);
         assert.equal(existsSync(receipt), false);
