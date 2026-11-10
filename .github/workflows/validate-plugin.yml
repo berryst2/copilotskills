@@ -54,7 +54,7 @@ jobs:
       - name: Test source and ZIP checks
         run: npm test
 
-      - name: Check all skill source folders
+      - name: Check all skill source folders.
         run: npm run check
 
   deploy:
