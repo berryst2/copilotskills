@@ -63,7 +63,7 @@ The packaging workflow checks that the directory contains `wiqd` and adds it to
 the PATH of subsequent steps via `GITHUB_PATH`, including preflight and staging.
 It does not install WIQD, change the service account, or copy EULA/auth state.
 The runner service account must have access to the installation and its own
-accepted EULA. When this variable is omitted, the existing job PATH is used and.
+accepted EULA. When this variable is omitted, the existing job PATH is used and another.
 
 If a run reports `spawnSync pwsh ENOENT`, the runner service cannot locate
 PowerShell. On the runner VM, follow Microsoft's
