@@ -1,5 +1,6 @@
 param(
     [Parameter(Mandatory)][string]$ProjectPath,
+    [string]$ReleaseVersion,
     [switch]$Provision,
     [switch]$CreateNewApp,
     [switch]$Publish
@@ -12,6 +13,20 @@ $ProjectPath = [IO.Path]::GetFullPath($ProjectPath)
 if (Test-Path -LiteralPath $ProjectPath) { throw "Use a new staging directory: $ProjectPath" }
 if ($CreateNewApp -and -not $Provision) { throw 'CreateNewApp requires Provision.' }
 if ($Publish -and -not $Provision) { throw 'Publish requires Provision.' }
+if ($ReleaseVersion -and -not $Provision) { throw 'ReleaseVersion requires Provision.' }
+if ($ReleaseVersion) {
+    if ($ReleaseVersion -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$' -or
+        @($ReleaseVersion.Split('.') | Where-Object { [double]$_ -gt 65535 }).Count -gt 0) {
+        throw 'ReleaseVersion must have three numeric components between 0 and 65535.'
+    }
+}
+
+if ($Provision) {
+    foreach ($name in @('provisioning-ids.json', 'banking-skills.zip', 'checksum.json', 'publication-receipt.json')) {
+        $output = Join-Path $root "dist\$name"
+        if (Test-Path -LiteralPath $output -PathType Leaf) { Remove-Item -LiteralPath $output }
+    }
+}
 
 & (Join-Path $PSScriptRoot 'check-wiqd.ps1')
 
@@ -83,6 +98,8 @@ if ($Provision) {
     }
     $manifestPath = Join-Path $ProjectPath 'appPackage\manifest.json'
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    if ($ReleaseVersion) { $manifest.version = $ReleaseVersion }
+    Write-Host "Using app version $($manifest.version)."
     $manifest.developer.name = $env:PLUGIN_DEVELOPER_NAME
     $manifest.developer.websiteUrl = $env:PLUGIN_WEBSITE_URL
     $manifest.developer.privacyUrl = $env:PLUGIN_PRIVACY_URL
@@ -94,7 +111,11 @@ Invoke-Wiqd @('plugin', 'validate', '--mode', 'source', '--path', $ProjectPath, 
 Write-Host "Source checks passed for $($skills.Count) skills. WIQD source mode is not full skill/package validation."
 if (-not $Provision) { return }
 
-Invoke-Wiqd @('plugin', 'provision', '--path', $ProjectPath, '--env', 'dev') | Out-Null
+if ($CreateNewApp -or -not $Publish) {
+    Invoke-Wiqd @('plugin', 'provision', '--path', $ProjectPath, '--env', 'dev') | Out-Null
+} else {
+    Write-Host 'Using the existing app identity for catalog submission; development provisioning is skipped.'
+}
 $dist = Join-Path $root 'dist'
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 $state = @{}
@@ -122,6 +143,7 @@ if ($Publish) {
     @{
         status = 'submitted_for_admin_approval'
         environment = 'dev'
+        version = $manifest.version
         correlationId = $publication.correlationId
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $dist 'publication-receipt.json') -Encoding utf8
     Write-Host 'Plugin submitted to the organization catalog for tenant administrator approval; it is not yet approved.'
