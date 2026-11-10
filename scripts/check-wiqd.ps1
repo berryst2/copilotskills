@@ -1,12 +1,14 @@
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
+$requiredVersion = '0.25.0'
 
 if (-not (Get-Command wiqd -ErrorAction SilentlyContinue)) {
-    throw 'Prepare the runner account with WIQD 0.24.0 before running this workflow.'
+    throw "Prepare the runner account with WIQD $requiredVersion before running this workflow."
 }
 $version = & wiqd --version --skill wiqd --workflow agent-ci-cd
-if ($LASTEXITCODE -ne 0 -or ($version -join "`n").Trim() -cne '0.24.0') {
-    throw 'The runner must have WIQD 0.24.0 on PATH. Install the pinned release during human runner setup.'
+$actualVersion = ($version -join "`n").Trim()
+if ($LASTEXITCODE -ne 0 -or $actualVersion -cne $requiredVersion) {
+    throw "The runner must have WIQD $requiredVersion on PATH; version probe returned '$actualVersion' (exit $LASTEXITCODE). Install the pinned release during human runner setup."
 }
 $text = & wiqd eula status --json --skill wiqd --workflow agent-ci-cd
 if ($LASTEXITCODE -ne 0) {
@@ -18,4 +20,4 @@ if ($result.status -cne 'success') { throw 'WIQD EULA status did not return a su
 if ($result.data.wiqd.state -cne 'accepted') {
     throw 'WIQD EULA acceptance is required at https://aka.ms/wiqd/eula. A human must review and accept interactively outside CI under the self-hosted runner account. CI cannot accept; do not copy or fabricate consent state.'
 }
-Write-Host 'WIQD 0.24.0 and existing human EULA acceptance verified for this runner account.'
+Write-Host "WIQD $requiredVersion and existing human EULA acceptance verified for this runner account."
