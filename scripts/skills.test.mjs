@@ -372,6 +372,8 @@ test('runner preflight enforces the pinned version and existing consent without 
 test('publication follows verified packaging and stops on validation or publish failures', async t => {
   for (const [label, failure, bootstrap, publish] of [
     ['existing app submission', '', false, true],
+    ['existing app with duplicate identity placeholders', '', false, true],
+    ['invalid Teams app ID', 'invalid-app-id', false, true],
     ['package-validation', 'package-validation', false, true],
     ['publish', 'publish', false, true],
     ['first-time provisioning', '', true, false],
@@ -382,6 +384,13 @@ test('publication follows verified packaging and stops on validation or publish 
       const root = fixture(t);
       for (const folder of ['scripts', 'banking-skills']) {
         cpSync(join(repository, folder), join(root, folder), { recursive: true });
+      }
+      const environmentTemplate = join(root, 'banking-skills', 'env', '.env.dev');
+      if (label === 'existing app with duplicate identity placeholders') {
+        writeFileSync(environmentTemplate,
+          'TEAMSFX_ENV=dev\r\nAPP_NAME_SUFFIX=dev\r\nAGENT_SCOPE=shared\r\nTEAMS_APP_ID=\r\nTEAMS_APP_ID=stale\r\nM365_TITLE_ID=\r\nM365_APP_ID=');
+      } else {
+        writeFileSync(environmentTemplate, readFileSync(environmentTemplate, 'utf8').trimEnd());
       }
       for (const dependency of ['yaml', 'fflate']) {
         cpSync(join(repository, 'node_modules', dependency),
@@ -395,11 +404,16 @@ test('publication follows verified packaging and stops on validation or publish 
       writeFileSync(join(root, 'pack.mjs'), `
         import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
         import { join, relative, sep } from 'node:path';
+        import { parseEnv } from 'node:util';
         import { zipSync, strToU8 } from 'fflate';
         const [project, output] = process.argv.slice(2);
         const folder = join(project, 'appPackage');
         const manifest = JSON.parse(readFileSync(join(folder, 'manifest.json'), 'utf8'));
-        manifest.id = process.env.TEAMS_APP_ID;
+        const environment = parseEnv(readFileSync(join(project, 'env', '.env.dev'), 'utf8'));
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(environment.TEAMS_APP_ID ?? '')) {
+          throw new Error('Staged environment lacks a valid TEAMS_APP_ID');
+        }
+        manifest.id = environment.TEAMS_APP_ID;
         manifest.name.short = 'banking-skillsdev';
         const entries = { 'manifest.json': strToU8(JSON.stringify(manifest)) };
         function visit(path) {
@@ -436,6 +450,7 @@ test('publication follows verified packaging and stops on validation or publish 
         delete env.M365_TITLE_ID;
         delete env.M365_APP_ID;
       }
+      if (failure === 'invalid-app-id') env.TEAMS_APP_ID = 'TEAMS_APP_ID=not-a-guid';
       delete env.M365_REFRESH_TOKEN;
       const result = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', `
         function wiqd {
@@ -477,7 +492,12 @@ test('publication follows verified packaging and stops on validation or publish 
           }
           return '{"status":"success","correlationId":"test-correlation"}'
         }
-        & (Join-Path $env:TEST_ROOT 'scripts/plugin.ps1') -ProjectPath (Join-Path $env:TEST_ROOT 'staged') -Provision -ReleaseVersion '1.4.10' -CreateNewApp:($env:TEST_BOOTSTRAP -eq 'true') -Publish:($env:TEST_PUBLISH -eq 'true')
+        try {
+          & (Join-Path $env:TEST_ROOT 'scripts/plugin.ps1') -ProjectPath (Join-Path $env:TEST_ROOT 'staged') -Provision -ReleaseVersion '1.4.10' -CreateNewApp:($env:TEST_BOOTSTRAP -eq 'true') -Publish:($env:TEST_PUBLISH -eq 'true')
+        } catch {
+          [Console]::Error.WriteLine($_.Exception.Message)
+          exit 1
+        }
       `], { encoding: 'utf8', env, timeout: 60000 });
       assert.ifError(result.error);
       const commands = readFileSync(join(root, 'commands.jsonl'), 'utf8')
@@ -485,6 +505,15 @@ test('publication follows verified packaging and stops on validation or publish 
       const index = action => commands.findIndex(args => args[0] === 'plugin' && args[1] === action);
       const packageValidation = commands.findIndex(args =>
         args[1] === 'validate' && args.includes('package'));
+      if (failure === 'invalid-app-id') {
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /TEAMS_APP_ID must be the real app GUID/);
+        assert.equal(index('validate'), -1);
+        assert.equal(index('provision'), -1);
+        assert.equal(index('package'), -1);
+        assert.equal(index('publish'), -1);
+        return;
+      }
       if (bootstrap) assert.ok(index('provision') > index('validate'));
       else assert.equal(index('provision'), -1);
       const stagedManifest = JSON.parse(readFileSync(join(root, 'staged', 'appPackage', 'manifest.json'), 'utf8').replace(/^\uFEFF/, ''));
@@ -501,9 +530,17 @@ test('publication follows verified packaging and stops on validation or publish 
         assert.equal(existsSync(join(root, 'dist', 'banking-skills.zip')), false);
         return;
       }
+      assert.ok(existsSync(join(root, 'dist', 'banking-skills.zip')), result.stderr);
+      const environmentLines = readFileSync(join(root, 'staged', 'env', '.env.dev'), 'utf8').split(/\r?\n/);
+      for (const name of ['TEAMS_APP_ID', 'M365_TITLE_ID', 'M365_APP_ID']) {
+        assert.equal(environmentLines.filter(line => line.startsWith(`${name}=`)).length, 1);
+      }
+      assert.ok(environmentLines.includes('TEAMSFX_ENV=dev'));
+      assert.ok(environmentLines.includes('AGENT_SCOPE=shared'));
       const packagedManifest = JSON.parse(new TextDecoder().decode(
         unzipSync(readFileSync(join(root, 'dist', 'banking-skills.zip')))['manifest.json']));
       assert.equal(packagedManifest.version, '1.4.10');
+      assert.equal(packagedManifest.id, '01234567-89ab-4cde-8f01-23456789abcd');
       assert.ok(index('package') > index('validate'));
       if (bootstrap) assert.ok(index('package') > index('provision'));
       if (!publish) {

@@ -211,6 +211,14 @@ validation, and publication failures stop the release explicitly.
 
 Download `banking-skills-provisioning-ids` and save its three non-secret values
 as environment variables `TEAMS_APP_ID`, `M365_TITLE_ID` and `M365_APP_ID`.
+Enter raw values only: no surrounding quotes, whitespace or `NAME=` prefixes.
+`TEAMS_APP_ID` must be the actual nonzero app GUID from provisioning, not a
+new random GUID. The staging script replaces identity placeholders instead of
+appending duplicate keys, and writes complete lines even when the template
+has no trailing newline. Other environment settings are preserved.
+If WIQD reports `PLUGIN_NOT_PROVISIONED` during packaging, check these stored
+values and use the updated staging script; do not create another app or rerun
+provisioning blindly to bypass the error.
 Leave `create_new_app` unchecked on subsequent runs to reuse that identity.
 Existing IDs must be absent when deliberately creating a separate new app.
 Do not upload environment files, user-secret files or authentication caches.

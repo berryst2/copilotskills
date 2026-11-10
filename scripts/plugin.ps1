@@ -83,6 +83,9 @@ if ($Provision) {
         }
     }
     $stateNames = @('TEAMS_APP_ID', 'M365_TITLE_ID', 'M365_APP_ID')
+    $environmentPath = Join-Path $ProjectPath 'env\.env.dev'
+    $environmentLines = @(Get-Content -LiteralPath $environmentPath |
+        Where-Object { $_ -notmatch '^\s*(TEAMS_APP_ID|M365_TITLE_ID|M365_APP_ID)\s*=' })
     if ($CreateNewApp) {
         foreach ($name in $stateNames) {
             if ([Environment]::GetEnvironmentVariable($name)) { throw "Remove $name when explicitly creating a new app." }
@@ -93,9 +96,19 @@ if ($Provision) {
             if ([string]::IsNullOrWhiteSpace($value) -or $value -match '[\r\n]') {
                 throw "Configure $name from the previous provisioning receipt, or explicitly choose create_new_app."
             }
-            Add-Content -LiteralPath (Join-Path $ProjectPath 'env\.env.dev') -Value "$name=$value"
+            if ($value -cne $value.Trim() -or $value -match '["'']') {
+                throw "Configure $name as the raw provisioning value without quotes or surrounding whitespace in the dev environment variables."
+            }
+            if ($name -eq 'TEAMS_APP_ID') {
+                $appId = [guid]::Empty
+                if (-not [guid]::TryParseExact($value, 'D', [ref]$appId) -or $appId -eq [guid]::Empty) {
+                    throw 'TEAMS_APP_ID must be the real app GUID from provisioning, without quotes or a TEAMS_APP_ID= prefix. Update Settings > Environments > dev > Environment variables.'
+                }
+            }
+            $environmentLines += "$name=$value"
         }
     }
+    Set-Content -LiteralPath $environmentPath -Value $environmentLines -Encoding utf8
     $manifestPath = Join-Path $ProjectPath 'appPackage\manifest.json'
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     if ($ReleaseVersion) { $manifest.version = $ReleaseVersion }
