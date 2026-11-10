@@ -1,4 +1,5 @@
 export const versionRecordPrefix = 'banking-skills-dev-version-';
+export const versionTagPrefix = 'refs/tags/banking-skills/dev/v';
 
 function parseVersion(value) {
   if (typeof value !== 'string' || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value)) {
@@ -18,10 +19,15 @@ function compare(left, right) {
   return 0;
 }
 
-export function nextReleaseVersion(sourceVersion, artifactNames, versionFloor = '', createNewApp = false) {
+export function nextReleaseVersion(sourceVersion, recordNames, versionFloor = '', createNewApp = false) {
   const versions = [parseVersion(sourceVersion)];
   let records = 0;
-  for (const name of artifactNames) {
+  for (const name of recordNames) {
+    if (name.startsWith(versionTagPrefix)) {
+      versions.push(parseVersion(name.slice(versionTagPrefix.length)));
+      records++;
+      continue;
+    }
     if (!name.startsWith(versionRecordPrefix)) continue;
     const match = name.slice(versionRecordPrefix.length).match(/^(\d+\.\d+\.\d+)-\d+-\d+$/);
     if (!match) throw new Error(`Invalid version reservation artifact: ${name}`);
@@ -30,7 +36,7 @@ export function nextReleaseVersion(sourceVersion, artifactNames, versionFloor = 
   }
   if (versionFloor) versions.push(parseVersion(versionFloor));
   if (records === 0 && !createNewApp && !versionFloor) {
-    throw new Error('No shared version record exists. Run the packaging workflow manually with version_floor set to the highest version already uploaded to Microsoft. Do not guess or create another app.');
+    throw new Error('No shared version record exists. Configure the dev environment variable PLUGIN_VERSION_FLOOR once with the highest version already uploaded to Microsoft (or supply the manual version_floor input). Do not guess or create another app.');
   }
   const next = versions.reduce((highest, version) => compare(version, highest) > 0 ? version : highest).slice();
   for (let index = 2; index >= 0; index--) {
