@@ -8,13 +8,18 @@ import { createRequire } from 'node:module';
 import { zipSync, unzipSync, strToU8 } from 'fflate';
 import { parseDocument } from 'yaml';
 import { discover, verify, repository } from './skills.mjs';
-import { nextReleaseVersion, versionRecordPrefix } from './release-version.mjs';
+import { nextReleaseVersion, versionRecordPrefix, versionTagPrefix } from './release-version.mjs';
 
 test('release versions advance across workflows, failed attempts, and reruns', () => {
   const record = (version, run = 1, attempt = 1) => `${versionRecordPrefix}${version}-${run}-${attempt}`;
   assert.throws(() => nextReleaseVersion('1.0.0', []), /highest version already uploaded/);
   assert.equal(nextReleaseVersion('1.0.0', [], '', true), '1.0.1');
   assert.equal(nextReleaseVersion('1.0.0', [], '1.4.9'), '1.4.10');
+  assert.equal(nextReleaseVersion('1.0.0', [`${versionTagPrefix}1.4.10`]), '1.4.11');
+  assert.equal(nextReleaseVersion('1.0.0',
+    [`${versionTagPrefix}1.4.10`, record('1.4.12')]), '1.4.13');
+  assert.equal(nextReleaseVersion('1.0.0', [`${versionTagPrefix}1.4.10`], '1.4.20'), '1.4.21');
+  assert.throws(() => nextReleaseVersion('1.0.0', [`${versionTagPrefix}broken`]), /Invalid/);
   assert.equal(nextReleaseVersion('1.0.0',
     [record('1.4.10', 100), record('1.4.9', 90), 'unrelated']), '1.4.11');
   assert.equal(nextReleaseVersion('1.0.0',
@@ -30,7 +35,7 @@ test('release versions advance across workflows, failed attempts, and reruns', (
   assert.throws(() => nextReleaseVersion('1.0.0', [`${versionRecordPrefix}broken`]), /Invalid/);
 });
 
-test('workflow allocation trusts only main release runs and persists its selected version', async t => {
+test('workflow allocation reserves durable tags and imports only trusted legacy records', async t => {
   const root = fixture(t);
   const workflow = parseDocument(readFileSync(
     join(repository, '.github', 'workflows', 'package-plugin.yml'), 'utf8')).toJS();
@@ -45,6 +50,8 @@ test('workflow allocation trusts only main release runs and persists its selecte
     { name: `${versionRecordPrefix}9.0.0-5-1`, workflow_run: { id: 5 } },
     { name: `${versionRecordPrefix}9.0.0-6-1`, workflow_run: { id: 6 }, expired: true }
   ];
+  const refs = [];
+  let writeFailure = false;
   const github = {
     paginate: async () => artifacts,
     rest: { actions: {
@@ -57,6 +64,17 @@ test('workflow allocation trusts only main release runs and persists its selecte
           '.github/workflows/validate-plugin.yml',
         ...(run_id === 5 ? { head_repository: { full_name: 'fork/repo' } } : {})
       } })
+    }, git: {
+      listMatchingRefs: async ({ ref }) => {
+        assert.equal(ref, versionTagPrefix.slice('refs/'.length));
+        return { data: refs };
+      },
+      createRef: async ({ ref, sha }) => {
+        if (writeFailure) throw new Error('Tag creation denied');
+        assert.equal(sha, 'test-commit');
+        assert.ok(!refs.some(existing => existing.ref === ref), 'Reservations must never be reused');
+        refs.push({ ref });
+      }
     } }
   };
   const outputs = {};
@@ -69,12 +87,30 @@ test('workflow allocation trusts only main release runs and persists its selecte
     { setOutput: (key, value) => { outputs[key] = value; }, info() {} }, { env });
   assert.equal(outputs.version, '1.0.7');
   assert.deepEqual(JSON.parse(readFileSync(outputs.receipt, 'utf8')), {
-    version: '1.0.7', runId: 7, attempt: '2', commit: 'test-commit', environment: 'dev'
+    version: '1.0.7', runId: 7, attempt: '2', commit: 'test-commit', environment: 'dev',
+    tag: `${versionTagPrefix}1.0.7`
   });
   artifacts.length = 0;
+  await script(createRequire(import.meta.url), github,
+    { repo: { owner: 'owner', repo: 'repo' }, runId: 8, sha: 'test-commit' },
+    { setOutput: (key, value) => { outputs[key] = value; }, info() {} }, { env });
+  assert.equal(outputs.version, '1.0.8', 'Artifact expiry must not reset version state');
+  writeFailure = true;
+  const failedOutputs = {};
+  await assert.rejects(() => script(createRequire(import.meta.url), github,
+    { repo: { owner: 'owner', repo: 'repo' }, runId: 9, sha: 'test-commit' },
+    { setOutput: (key, value) => { failedOutputs[key] = value; }, info() {} }, { env }), /Tag creation denied/);
+  assert.deepEqual(failedOutputs, {}, 'No deployable version may be emitted before durable reservation');
+  writeFailure = false;
+  refs.length = 0;
   await assert.rejects(() => script(createRequire(import.meta.url), github,
     { repo: { owner: 'owner', repo: 'repo' }, runId: 7 },
     { setOutput() {}, info() {} }, { env }), /No shared version record/);
+  env.VERSION_FLOOR = '1.4.0';
+  await script(createRequire(import.meta.url), github,
+    { repo: { owner: 'owner', repo: 'repo' }, runId: 10, sha: 'test-commit' },
+    { setOutput: (key, value) => { outputs[key] = value; }, info() {} }, { env });
+  assert.equal(outputs.version, '1.4.1', 'A configured baseline must initialize automatic main releases');
 });
 
 function fixture(t) {
@@ -108,8 +144,28 @@ function archive(root) {
   return entries;
 }
 
-test('repository contains 12 uniquely named skills', () => {
-  assert.equal(discover().length, 12);
+test('repository contains valid uniquely named skills without a fixed count', () => {
+  const skills = discover();
+  assert.ok(skills.length > 0);
+  assert.equal(new Set(skills.map(skill => skill.name)).size, skills.length);
+});
+
+test('discovery and packaging follow added and removed skill folders', t => {
+  const root = fixture(t);
+  for (const name of ['additional-skill', 'another-skill']) {
+    const folder = join(root, 'legal', name);
+    mkdirSync(folder);
+    writeFileSync(join(folder, 'SKILL.md'), `---\nname: ${name}\ndescription: Added skill\n---\nBody`);
+  }
+  const zip = join(root, 'plugin.zip');
+  assert.equal(discover(root).length, 6);
+  writeFileSync(zip, zipSync(archive(root)));
+  assert.equal(verify(zip, root).skillCount, 6);
+  rmSync(join(root, 'legal', 'additional-skill'), { recursive: true });
+  assert.equal(discover(root).length, 5);
+  assert.throws(() => verify(zip, root), /exactly the source skills/);
+  writeFileSync(zip, zipSync(archive(root)));
+  assert.equal(verify(zip, root).skillCount, 5);
 });
 
 test('rejects malformed or duplicate YAML', t => {
@@ -188,7 +244,11 @@ test('workflow YAML parses with expected secret-free CI and gated release', () =
     if (firstPowerShellStep >= 0) assert.ok(powershell < firstPowerShellStep);
     if (file === 'validate-plugin.yml') {
       assert.ok(!JSON.stringify(workflow).includes('secrets.'));
-      assert.ok(workflow.on.pull_request.paths.includes('legal/**'));
+      assert.deepEqual(workflow.on.push.branches, ['main']);
+      for (const category of ['legal', 'lending', 'operations', 'technology']) {
+        assert.ok(workflow.on.pull_request.paths.includes(`${category}/**`));
+        assert.ok(workflow.on.push.paths.includes(`${category}/**`));
+      }
       assert.equal(workflow.jobs.validate.if,
         "github.event_name == 'pull_request' || github.ref == 'refs/heads/main'");
       const routing = workflow.jobs.validate['runs-on'].match(
@@ -204,6 +264,7 @@ test('workflow YAML parses with expected secret-free CI and gated release', () =
       assert.deepEqual(workflow.jobs.deploy.with, { create_new_app: false, publish: true });
       assert.equal(workflow.jobs.deploy.secrets, 'inherit');
       assert.equal(workflow.jobs.deploy.permissions.actions, 'read');
+      assert.equal(workflow.jobs.deploy.permissions.contents, 'write');
     } else {
       assert.equal(workflow.on.workflow_call.inputs.publish.type, 'boolean');
       assert.equal(workflow.on.workflow_dispatch.inputs.publish.default, false);
@@ -219,9 +280,12 @@ test('workflow YAML parses with expected secret-free CI and gated release', () =
       assert.match(steps[executablePath].run, /Add-Content -LiteralPath \$env:GITHUB_PATH/);
       const deploy = steps.findIndex(step => step.env?.M365_ACCOUNT_PASSWORD);
       const allocate = steps.findIndex(step => step.id === 'version');
-      const reserve = steps.findIndex(step => step.name === 'Persist version reservation before cloud changes');
+      const reserve = steps.findIndex(step => step.name === 'Upload version reservation receipt');
       assert.ok(tests < allocate && allocate < reserve && reserve < deploy);
       assert.equal(workflow.permissions.actions, 'read');
+      assert.equal(workflow.jobs.package.permissions.contents, 'write');
+      assert.equal(steps[allocate].env.VERSION_FLOOR, '${{ inputs.version_floor || vars.PLUGIN_VERSION_FLOOR }}');
+      assert.match(steps[allocate].with.script, /github\.rest\.git\.createRef/);
       assert.equal(steps[reserve].uses, 'actions/upload-artifact@v4');
       assert.equal(steps[reserve].with['if-no-files-found'], 'error');
       assert.equal(steps[deploy].env.RELEASE_VERSION, '${{ steps.version.outputs.version }}');
