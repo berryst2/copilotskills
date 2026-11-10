@@ -1,5 +1,18 @@
 # Banking skills plugin
 
+Package skills maintained in GitHub as a Microsoft 365 Copilot plugin and submit
+updates to your organization's catalog using WIQD.
+
+**Start here:** [End-to-end onboarding and automation guide](docs/skills-plugin-cicd.md).
+It covers a new repository, runner preparation, GitHub configuration, first-time
+bootstrap, recurring releases, troubleshooting and official WIQD references.
+The sections below describe this repository's implementation and operating rules.
+
+Here, "Microsoft plugin registry" means the **Microsoft 365 organization catalog**.
+This pipeline does not publish to the public Marketplace/AppSource or to a
+coding-assistant plugin marketplace. Catalog submission still needs tenant
+administrator approval.
+
 The `legal`, `lending`, `operations` and `technology` folders are the source of
 truth. Each skill folder needs a unique kebab-case name matching its YAML
 frontmatter, a description and a nonempty `SKILL.md` body. Keep supporting files
@@ -47,7 +60,8 @@ The source categories must each retain at least one valid skill.
 Automatic deployment requires the three existing app IDs below. It never
 creates a new app automatically. Bootstrap once using the manual packaging
 workflow, save the IDs, then subsequent successful main validations deploy
-automatically. Updating these workflows does not itself execute a deployment.
+automatically. Merging workflow-file changes also matches the deployment trigger;
+README-only or documentation-only changes do not.
 For an app already uploaded before adopting this pipeline, configure its
 confirmed version baseline once as described below.
 
@@ -79,7 +93,8 @@ The packaging workflow checks that the directory contains `wiqd` and adds it to
 the PATH of subsequent steps via `GITHUB_PATH`, including preflight and staging.
 It does not install WIQD, change the service account, or copy EULA/auth state.
 The runner service account must have access to the installation and its own
-accepted EULA. When this variable is omitted, the existing job PATH is used and another.
+accepted EULA. When this variable is omitted, the existing job PATH must already
+resolve WIQD.
 
 If a run reports `spawnSync pwsh ENOENT`, the runner service cannot locate
 PowerShell. On the runner VM, follow Microsoft's
@@ -145,7 +160,9 @@ Merge the workflows onto `main`, then select **Actions > Package Microsoft 365
 plugin > Run workflow**. Select `main`.
 The same workflow can also be called automatically after validation.
 
-For the first deployment only, check `create_new_app`. This authorizes creation
+For a brand-new app's first deployment only, check `create_new_app` and leave
+`publish` unchecked. Keep all three existing-app ID variables absent for this
+bootstrap. This authorizes creation
 of cloud resources in the shared `dev` environment. The scaffold's provision
 lifecycle registers/updates the app and publishes a shared deployment; it is
 not an offline ZIP build or tenant-catalog submission.
@@ -235,13 +252,58 @@ qualified authentication/service access. It does not evaluate skill behavior.
 WIQD publish rebuilds its upload from the staged project; validating the exported
 ZIP does not prove that publish uploads those exact same bytes.
 No audience sharing or public Marketplace submission is performed. No live
-release was executed while implementing this pipeline.
+release was executed by the assistant while implementing this pipeline; the
+repository owner subsequently reported a successful update (see below).
 
 Fresh GitHub-hosted runners cannot use this release path without an officially
 supported consent setup. Do not add automated acceptance, fake receipts or copy
 developer configuration/authentication caches into CI. If consent becomes
 invalid, re-run the human setup on the dedicated runner; the pipeline fails
 closed rather than repairing consent automatically.
+
+## Reusable implementation record
+
+On 10 November 2026, the repository owner confirmed that the latest change
+reached the M365 Tools plugin through this pipeline. This is a user-reported
+successful update, not evidence that every skill's runtime behavior was tested
+or that another tenant's approval/authentication policies will be identical.
+
+For future implementations, reuse these project-owned components:
+
+- [Validation workflow](.github/workflows/validate-plugin.yml): secret-free PR
+  checks, followed by trusted deployment of the same merged revision on `main`.
+- [Packaging workflow](.github/workflows/package-plugin.yml): prepared runner,
+  `dev` environment bindings, serialized releases, version reservation and receipts.
+- [Lifecycle script](scripts/plugin.ps1): fresh staging, WIQD skill registration,
+  publisher/identity injection, validation, packaging and organization submission.
+- [Skill checker](scripts/skills.mjs): dynamic skill discovery and exact packaged
+  resource verification, rather than a fixed expected number of skills.
+- [Version allocator](scripts/release-version.mjs): durable, increasing versions
+  across both successful and failed deployment attempts.
+- [Regression tests](scripts/skills.test.mjs): runner prerequisites, release
+  routing, version allocation, staged identity and lifecycle failure gates.
+
+Lessons that made this deployment work:
+
+1. Prepare and verify WIQD under the runner service account, not only an SSH
+   login. Make its executable directory explicit through `WIQD_BIN_DIR`.
+2. Keep human EULA acceptance outside automation. Store credentials as GitHub
+   environment secrets and publisher details/app IDs as environment variables.
+3. Separate one-time app creation from recurring submission. Reuse real app IDs;
+   do not provision again merely because a packaging diagnostic suggests it.
+4. Reserve a higher version before cloud operations. Keep failed reservations;
+   use a confirmed version floor when onboarding an already-uploaded app.
+5. Replace staged environment assignments instead of appending to templates.
+   Missing final newlines and duplicate placeholders must not corrupt app IDs.
+6. Test the environment file actually read by the packager, not just inherited
+   process variables. Keep regression cases for missing newlines and duplicate IDs.
+7. Stop on validation or lifecycle failures; never automatically retry uncertain
+   cloud mutations. Submission and tenant administrator approval are separate.
+
+When adapting this pattern to another repository, confirm its source directories,
+CLI version, tenant, authentication policy and catalog destination first. Follow
+the onboarding sections above; never copy credentials, consent state or app IDs
+from this deployment.
 
 ## Local checks
 
