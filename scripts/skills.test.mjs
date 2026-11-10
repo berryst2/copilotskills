@@ -143,6 +143,10 @@ test('workflow YAML parses with expected secret-free CI and gated release', () =
       assert.equal(workflow.concurrency['cancel-in-progress'], false);
       const steps = workflow.jobs.package.steps;
       const preflight = steps.findIndex(step => step.run === './scripts/check-wiqd.ps1');
+      const executablePath = steps.findIndex(step => step.name === 'Configure WIQD executable directory');
+      assert.ok(executablePath >= 0 && executablePath < preflight);
+      assert.equal(steps[executablePath].env.WIQD_BIN_DIR, '${{ vars.WIQD_BIN_DIR }}');
+      assert.match(steps[executablePath].run, /Add-Content -LiteralPath \$env:GITHUB_PATH/);
       const deploy = steps.findIndex(step => step.env?.M365_ACCOUNT_PASSWORD);
       assert.ok(preflight >= 0 && preflight < deploy);
       assert.equal(steps[deploy].env.PUBLISH_PLUGIN, '${{ inputs.publish }}');
@@ -150,6 +154,34 @@ test('workflow YAML parses with expected secret-free CI and gated release', () =
       const receipt = steps.find(step => step.with?.name === 'banking-skills-publication');
       assert.equal(receipt.if, 'success() && inputs.publish');
       assert.equal(steps.at(-1).if, 'always()');
+    }
+  }
+});
+
+test('configured WIQD directory is persisted and invalid directories fail', t => {
+  const root = fixture(t);
+  const bin = join(root, 'bin with spaces');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'wiqd'), '');
+  const workflow = parseDocument(readFileSync(
+    join(repository, '.github', 'workflows', 'package-plugin.yml'), 'utf8')).toJS();
+  const step = workflow.jobs.package.steps.find(step =>
+    step.name === 'Configure WIQD executable directory');
+  for (const [index, directory] of [bin, join(root, 'missing'), 'relative', `${bin}\nextra`].entries()) {
+    const pathFile = join(root, `github-path-${index}`);
+    writeFileSync(pathFile, '');
+    const result = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', step.run], {
+      encoding: 'utf8',
+      env: { ...process.env, WIQD_BIN_DIR: directory, GITHUB_PATH: pathFile }
+    });
+    assert.ifError(result.error);
+    if (index === 0) {
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(readFileSync(pathFile, 'utf8').trim(), bin);
+    } else {
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /WIQD_BIN_DIR must be an absolute directory/);
+      assert.equal(readFileSync(pathFile, 'utf8'), '');
     }
   }
 });

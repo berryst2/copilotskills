@@ -52,6 +52,22 @@ jobs:
             exit 1
           fi
           pwsh -NoLogo -NoProfile -NonInteractive -Command 'if ($PSVersionTable.PSVersion.Major -lt 7) { throw "PowerShell 7 or newer is required." }; $PSVersionTable.PSVersion.ToString()'
+      - name: Configure WIQD executable directory
+        shell: pwsh
+        env:
+          WIQD_BIN_DIR: ${{ vars.WIQD_BIN_DIR }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not [string]::IsNullOrWhiteSpace($env:WIQD_BIN_DIR)) {
+            if ($env:WIQD_BIN_DIR -match '[\r\n]' -or
+                -not [IO.Path]::IsPathFullyQualified($env:WIQD_BIN_DIR) -or
+                -not (Test-Path -LiteralPath (Join-Path $env:WIQD_BIN_DIR 'wiqd') -PathType Leaf)) {
+              throw 'WIQD_BIN_DIR must be an absolute directory containing the installed wiqd executable, accessible to the runner account.'
+            }
+            Add-Content -LiteralPath $env:GITHUB_PATH -Value $env:WIQD_BIN_DIR -Encoding utf8
+          } elseif (-not (Get-Command wiqd -ErrorAction SilentlyContinue)) {
+            throw 'WIQD is not on the job PATH. Set the dev environment variable WIQD_BIN_DIR to the directory printed by dirname "$(command -v wiqd)" in your working runner-account terminal.'
+          }
       - name: Verify prepared runner and human EULA acceptance
         shell: pwsh
         run: ./scripts/check-wiqd.ps1

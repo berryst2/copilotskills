@@ -53,6 +53,18 @@ job; these tests exercise the PowerShell scripts without live deployment.
 Both workflows check PowerShell availability before running the tests or any
 PowerShell steps. They do not install it or skip tests when it is missing.
 
+If WIQD works over SSH but the job cannot find it, open **Settings > Environments >
+dev > Environment variables** in GitHub and add `WIQD_BIN_DIR`. Set its value to
+the absolute directory containing `wiqd`, not the executable itself. Obtain that
+directory in the working runner-account terminal with
+`dirname "$(command -v wiqd)"`. For the current runner installation it is
+`/home/azureuser/.local/lib/nodejs/node-v24.15.0-linux-x64/bin`.
+The packaging workflow checks that the directory contains `wiqd` and adds it to
+the PATH of subsequent steps via `GITHUB_PATH`, including preflight and staging.
+It does not install WIQD, change the service account, or copy EULA/auth state.
+The runner service account must have access to the installation and its own
+accepted EULA. When this variable is omitted, the existing job PATH is used.
+
 If a run reports `spawnSync pwsh ENOENT`, the runner service cannot locate
 PowerShell. On the runner VM, follow Microsoft's
 [Ubuntu PowerShell installation instructions](https://learn.microsoft.com/powershell/scripting/install/install-ubuntu)
