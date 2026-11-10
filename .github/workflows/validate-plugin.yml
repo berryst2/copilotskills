@@ -48,6 +48,15 @@ jobs:
           node-version: "24.15.0"
           package-manager-cache: false
 
+      - name: Verify PowerShell prerequisite
+        shell: bash
+        run: |
+          if ! command -v pwsh >/dev/null 2>&1; then
+            echo "::error::PowerShell 7 (pwsh) is missing from the runner service PATH. Install it during runner setup and restart the runner service; see README.md."
+            exit 1
+          fi
+          pwsh -NoLogo -NoProfile -NonInteractive -Command 'if ($PSVersionTable.PSVersion.Major -lt 7) { throw "PowerShell 7 or newer is required." }; $PSVersionTable.PSVersion.ToString()'
+
       - name: Install source check dependencies
         run: npm ci
 

@@ -47,7 +47,25 @@ files. Neither proves runtime behavior or Marketplace acceptance.
 The release workflow targets a persistent Linux x64 self-hosted runner with
 labels `self-hosted`, `Linux`, `X64`. No custom `wiqd` label is required.
 Install Node 24.15.0, PowerShell 7 and WIQD 0.24.0 during
-human runner setup, and ensure `wiqd` is on the runner service account's PATH.
+human runner setup, and ensure both `pwsh` and `wiqd` are on the runner service
+account's PATH. PowerShell is also required by `npm test` in the source-check
+job; these tests exercise the PowerShell scripts without live deployment.
+Both workflows check PowerShell availability before running the tests or any
+PowerShell steps. They do not install it or skip tests when it is missing.
+
+If a run reports `spawnSync pwsh ENOENT`, the runner service cannot locate
+PowerShell. On the runner VM, follow Microsoft's
+[Ubuntu PowerShell installation instructions](https://learn.microsoft.com/powershell/scripting/install/install-ubuntu)
+for your Ubuntu version. Once the Microsoft package repository is configured,
+install with `sudo apt-get update` and `sudo apt-get install -y powershell`.
+Verify `command -v pwsh` and
+`pwsh -NoProfile -NonInteractive -Command '$PSVersionTable.PSVersion'` as the
+runner service account, not just your SSH login account.
+If you changed PATH, refresh the runner's captured environment as that account
+using `./env.sh` from its installation directory. Restart the runner service
+from that directory with `sudo ./svc.sh stop`, then `sudo ./svc.sh start`.
+Start a new workflow run using the updated commit. Installing PowerShell does
+not require accepting the WIQD EULA again.
 
 A human must review the [WIQD EULA](https://aka.ms/wiqd/eula) and, if they agree,
 run `wiqd eula accept wiqd` interactively outside CI as that same account.
