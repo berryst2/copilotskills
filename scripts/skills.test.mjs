@@ -107,6 +107,16 @@ test('workflow YAML parses with expected secret-free CI and gated release', () =
     const workflow = document.toJS();
     assert.ok(workflow.on.workflow_dispatch !== undefined || 'workflow_dispatch' in workflow.on);
     assert.equal(workflow.permissions.contents, 'read');
+    const steps = (workflow.jobs.validate ?? workflow.jobs.package).steps;
+    const powershell = steps.findIndex(step => step.name === 'Verify PowerShell prerequisite');
+    const tests = steps.findIndex(step => step.run === 'npm test');
+    const firstPowerShellStep = steps.findIndex(step => step.shell === 'pwsh');
+    assert.ok(powershell >= 0 && powershell < tests);
+    assert.equal(steps[powershell].shell, 'bash');
+    assert.match(steps[powershell].run, /command -v pwsh/);
+    assert.match(steps[powershell].run, /exit 1/);
+    assert.match(steps[powershell].run, /PSVersion\.Major -lt 7/);
+    if (firstPowerShellStep >= 0) assert.ok(powershell < firstPowerShellStep);
     if (file === 'validate-plugin.yml') {
       assert.ok(!JSON.stringify(workflow).includes('secrets.'));
       assert.ok(workflow.on.pull_request.paths.includes('legal/**'));
